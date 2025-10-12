@@ -1,0 +1,22 @@
+{
+  "name": "telegram-customer-service",
+  "version": "1.0.0",
+  "description": "Telegram双向客服系统 - 用户私聊自动创建群组话题,实现高效客服对话",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js",
+    "get-group-id": "node get-group-id.js"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "customer-service",
+    "forum",
+    "topic"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "telegraf": "^4.16.3"
+  }
+}
