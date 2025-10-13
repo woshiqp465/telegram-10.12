@@ -685,6 +685,21 @@
     img.src = stickerUrl;
     img.style.cssText = 'width:150px;height:150px;object-fit:contain;display:block';
     img.alt = emoji || '贴纸';
+
+    // 添加加载错误处理
+    img.onerror = () => {
+      console.error('贴纸加载失败:', stickerUrl);
+      contentDiv.innerHTML = '';
+      const errorDiv = document.createElement('div');
+      errorDiv.textContent = emoji ? `${emoji} [贴纸]` : '📄 [贴纸加载失败]';
+      errorDiv.style.cssText = 'font-size:48px;padding:20px';
+      contentDiv.appendChild(errorDiv);
+    };
+
+    img.onload = () => {
+      console.log('贴纸加载成功:', stickerUrl);
+    };
+
     contentDiv.appendChild(img);
 
     msgContainer.appendChild(contentDiv);
@@ -730,6 +745,21 @@
     img.onclick = () => {
       window.open(gifUrl, '_blank');
     };
+
+    // 添加加载错误处理
+    img.onerror = () => {
+      console.error('GIF加载失败:', gifUrl);
+      contentDiv.innerHTML = '';
+      const errorDiv = document.createElement('div');
+      errorDiv.textContent = '🎞️ [动画加载失败]';
+      errorDiv.style.cssText = 'font-size:24px;padding:20px;color:#999';
+      contentDiv.appendChild(errorDiv);
+    };
+
+    img.onload = () => {
+      console.log('GIF加载成功:', gifUrl);
+    };
+
     contentDiv.appendChild(img);
 
     msgContainer.appendChild(contentDiv);
