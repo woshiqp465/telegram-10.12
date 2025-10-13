@@ -1,4 +1,7 @@
 {
-  "botToken": "YOUR_BOT_TOKEN_HERE",
-  "groupId": -1001234567890
+  "BOT_TOKEN": "填写你的 Bot Token",
+  "GROUP_ID": "填写你的群组 ID（需要加 -100 前缀）",
+  "说明": "获取方式：",
+  "BOT_TOKEN说明": "向 @BotFather 创建 Bot 后获得",
+  "GROUP_ID说明": "运行 node scripts/get-group-id.js 获取"
 }
