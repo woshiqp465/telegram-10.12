@@ -1,13 +1,12 @@
 /**
- * Telegram 客服系统 - 前端聊天组件（增强版）
- * 支持：文本、图片、表情、Emoji、复制粘贴
+ * Telegram 客服系统 - 前端聊天组件 V2
+ * 支持：消息撤回、编辑、图片+文字、复制粘贴、表情
  */
 (function() {
   'use strict';
 
   const config = window.ChatWidgetConfig || {};
   const wsUrl = config.wsUrl || 'ws://192.168.9.159:8080';
-  const apiUrl = config.apiUrl || 'http://192.168.9.159:3000';
   const position = config.position || 'right';
   const primaryColor = config.primaryColor || '#0088cc';
 
@@ -19,9 +18,11 @@
 
   let ws = null;
   let connected = false;
+  let messageIdCounter = 0;
+  const messages = new Map(); // 存储所有消息 {msgId -> {data, element}}
 
-  // Emoji 列表（常用）
-  const emojis = ['😀','😃','😄','😁','😆','😅','🤣','😂','🙂','🙃','😉','😊','😇','🥰','😍','🤩','😘','😗','☺️','😚','😙','🥲','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🤫','🤔','🤐','🤨','😐','😑','😶','😏','😒','🙄','😬','🤥','😌','😔','😪','🤤','😴','😷','🤒','🤕','🤢','🤮','🤧','🥵','🥶','😵','🤯','🤠','🥳','😎','🤓','🧐','😕','😟','🙁','☹️','😮','😯','😲','😳','🥺','😦','😧','😨','😰','😥','😢','😭','😱','😖','😣','😞','😓','😩','😫','🥱','😤','😡','😠','🤬','👍','👎','👊','✊','🤛','🤜','🤞','✌️','🤟','🤘','👌','🤏','👈','👉','👆','👇','☝️','✋','🤚','🖐️','🖖','👋','🤙','💪','🙏','✍️','💅','🤳'];
+  // Emoji 列表
+  const emojis = ['😀','😃','😄','😁','😆','😅','🤣','😂','🙂','🙃','😉','😊','😇','🥰','😍','🤩','😘','😗','☺️','😚','😙','🥲','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🤫','🤔','🤐','🤨','😐','😑','😶','😏','😒','🙄','😬','🤥','😌','😔','😪','🤤','😴','😷','🤒','🤕','🤢','🤮','🤧','🥵','🥶','😵','🤯','🤠','🥳','😎','🤓','🧐','😕','😟','🙁','☹️','😮','😯','😲','😳','🥺','😦','😧','😨','😰','😥','😢','😭','😱','😖','😣','😞','😓','😩','😫','🥱','😤','😡','😠','🤬','👍','👎','👊','✊','🤛','🤜','🤞','✌️','🤟','🤘','👌','🤏','👈','👉','👆','👇','☝️','✋','🤚','🖐️','🖖','👋','🤙','💪','🙏','✍️','💅','🤳','❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','❣️','💕','💞','💓','💗','💖','💘','💝'];
 
   function createWidget() {
     const posStyle = position === 'right' ? 'right:20px' : 'left:20px';
@@ -35,7 +36,7 @@
         </div>
 
         <!-- 聊天窗口 -->
-        <div id="chat-window" style="display:none;position:absolute;bottom:80px;${windowPosStyle};width:380px;height:580px;background:white;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,0.2);flex-direction:column;overflow:hidden">
+        <div id="chat-window" style="display:none;position:absolute;bottom:80px;${windowPosStyle};width:400px;height:600px;background:white;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,0.2);flex-direction:column;overflow:hidden">
 
           <!-- 头部 -->
           <div style="background:${primaryColor};color:white;padding:16px;display:flex;justify-content:space-between;align-items:center">
@@ -52,6 +53,9 @@
           <!-- Emoji 选择器 -->
           <div id="emoji-picker" style="display:none;max-height:200px;overflow-y:auto;padding:8px;background:white;border-top:1px solid #e0e0e0;text-align:center"></div>
 
+          <!-- 图片预览区 -->
+          <div id="image-preview" style="display:none;padding:8px 16px;background:#f9f9f9;border-top:1px solid #e0e0e0"></div>
+
           <!-- 输入区域 -->
           <div style="background:white;border-top:1px solid #e0e0e0">
             <!-- 工具栏 -->
@@ -65,7 +69,7 @@
             <div style="padding:12px 16px">
               <div style="display:flex;gap:8px;align-items:flex-end">
                 <div style="flex:1;position:relative">
-                  <div id="chat-input" contenteditable="true" placeholder="输入消息..." style="min-height:40px;max-height:120px;overflow-y:auto;padding:10px 12px;border:1px solid #e0e0e0;border-radius:20px;outline:none;background:white;line-height:1.5;font-size:15px" data-placeholder="输入消息..."></div>
+                  <div id="chat-input" contenteditable="true" placeholder="输入消息..." style="min-height:40px;max-height:120px;overflow-y:auto;padding:10px 12px;border:1px solid #e0e0e0;border-radius:20px;outline:none;background:white;line-height:1.5" data-placeholder="输入消息..."></div>
                 </div>
                 <button id="chat-send" style="background:${primaryColor};color:white;border:none;border-radius:50%;width:40px;height:40px;cursor:pointer;font-size:18px;flex-shrink:0;transition:opacity 0.2s" onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">➤</button>
               </div>
@@ -94,29 +98,104 @@
         }
         .emoji-item {
           display: inline-block;
-          font-size: 28px;
-          padding: 6px;
+          font-size: 24px;
+          padding: 4px;
           cursor: pointer;
           border-radius: 4px;
           transition: background 0.2s;
-          line-height: 1;
-          width: 40px;
-          height: 40px;
-          text-align: center;
         }
         .emoji-item:hover {
           background: #f0f0f0;
-          transform: scale(1.2);
         }
         .message-image {
-          max-width: 250px;
-          max-height: 250px;
+          max-width: 280px;
+          max-height: 280px;
           border-radius: 8px;
           cursor: pointer;
           transition: opacity 0.2s;
+          display: block;
         }
         .message-image:hover {
           opacity: 0.9;
+        }
+        .message-bubble {
+          position: relative;
+          max-width: 75%;
+          padding: 8px 12px;
+          border-radius: 12px;
+          word-wrap: break-word;
+          white-space: pre-wrap;
+        }
+        .message-container {
+          margin-bottom: 12px;
+          display: flex;
+          position: relative;
+        }
+        .message-container:hover .message-actions {
+          opacity: 1;
+        }
+        .message-actions {
+          position: absolute;
+          top: 0;
+          display: flex;
+          gap: 4px;
+          opacity: 0;
+          transition: opacity 0.2s;
+          background: rgba(255,255,255,0.95);
+          padding: 4px;
+          border-radius: 8px;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        }
+        .message-container.user .message-actions {
+          right: 0;
+        }
+        .message-container.staff .message-actions {
+          left: 0;
+        }
+        .action-btn {
+          background: none;
+          border: none;
+          padding: 4px 8px;
+          cursor: pointer;
+          font-size: 14px;
+          border-radius: 4px;
+          transition: background 0.2s;
+        }
+        .action-btn:hover {
+          background: #f0f0f0;
+        }
+        .message-edited {
+          font-size: 11px;
+          color: #999;
+          font-style: italic;
+          margin-top: 4px;
+        }
+        .image-caption {
+          padding: 8px;
+          font-size: 14px;
+        }
+        .preview-image-container {
+          position: relative;
+          display: inline-block;
+        }
+        .preview-image {
+          max-width: 200px;
+          max-height: 150px;
+          border-radius: 8px;
+        }
+        .preview-remove {
+          position: absolute;
+          top: 4px;
+          right: 4px;
+          background: rgba(0,0,0,0.6);
+          color: white;
+          border: none;
+          border-radius: 50%;
+          width: 24px;
+          height: 24px;
+          cursor: pointer;
+          font-size: 16px;
+          line-height: 20px;
         }
       </style>
     `;
@@ -125,7 +204,6 @@
   }
 
   function initEvents() {
-    // 打开/关闭聊天窗口
     document.getElementById('chat-button').onclick = () => {
       const win = document.getElementById('chat-window');
       if (win.style.display === 'none') {
@@ -141,10 +219,8 @@
       document.getElementById('chat-window').style.display = 'none';
     };
 
-    // 发送消息
     document.getElementById('chat-send').onclick = sendMsg;
 
-    // 输入框回车发送
     const inputDiv = document.getElementById('chat-input');
     inputDiv.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
@@ -153,13 +229,10 @@
       }
     });
 
-    // 粘贴处理（支持图片粘贴）
     inputDiv.addEventListener('paste', handlePaste);
 
-    // Emoji 按钮
     document.getElementById('btn-emoji').onclick = toggleEmojiPicker;
 
-    // 图片上传按钮
     document.getElementById('btn-image').onclick = () => {
       document.getElementById('file-input').click();
     };
@@ -167,12 +240,11 @@
     document.getElementById('file-input').onchange = (e) => {
       const file = e.target.files[0];
       if (file) {
-        uploadImage(file);
+        previewImage(file);
       }
-      e.target.value = ''; // 清空，允许重复上传同一文件
+      e.target.value = '';
     };
 
-    // 初始化 Emoji 选择器
     initEmojiPicker();
   }
 
@@ -199,7 +271,6 @@
     const input = document.getElementById('chat-input');
     input.focus();
 
-    // 在光标位置插入 emoji
     const selection = window.getSelection();
     const range = selection.getRangeAt(0);
     const textNode = document.createTextNode(emoji);
@@ -214,18 +285,16 @@
     const items = e.clipboardData.items;
     let hasImage = false;
 
-    // 检查是否有图片
     for (let i = 0; i < items.length; i++) {
       if (items[i].type.indexOf('image') !== -1) {
         e.preventDefault();
         const file = items[i].getAsFile();
-        uploadImage(file);
+        previewImage(file);
         hasImage = true;
         break;
       }
     }
 
-    // 如果没有图片，处理文本粘贴（纯文本）
     if (!hasImage) {
       e.preventDefault();
       const text = e.clipboardData.getData('text/plain');
@@ -233,31 +302,24 @@
     }
   }
 
-  function uploadImage(file) {
+  let pendingImage = null;
+
+  function previewImage(file) {
     if (!file || !file.type.match('image.*')) {
       addMsg('❌ 只支持图片格式', 'sys');
       return;
     }
 
-    // 检查文件大小（限制 5MB）
     if (file.size > 5 * 1024 * 1024) {
       addMsg('❌ 图片大小不能超过 5MB', 'sys');
       return;
     }
 
-    // 显示上传中提示
-    const msgId = 'upload-' + Date.now();
-    addMsg('📤 正在上传图片...', 'sys', msgId);
-
-    // 转换为 Base64
     const reader = new FileReader();
     reader.onload = (e) => {
       const base64 = e.target.result;
-
-      // 创建预览
       const img = new Image();
       img.onload = () => {
-        // 压缩图片（如果太大）
         const canvas = document.createElement('canvas');
         let width = img.width;
         let height = img.height;
@@ -279,27 +341,34 @@
         ctx.drawImage(img, 0, 0, width, height);
 
         const compressedBase64 = canvas.toDataURL('image/jpeg', 0.8);
+        pendingImage = compressedBase64;
 
-        // 移除上传提示
-        removeMsg(msgId);
-
-        // 显示图片消息
-        addImageMsg(compressedBase64, 'user');
-
-        // 发送到服务器
-        if (ws && ws.readyState === 1) {
-          ws.send(JSON.stringify({
-            type: 'chat',
-            contentType: 'image',
-            data: compressedBase64,
-            filename: file.name
-          }));
-        }
+        showImagePreview(compressedBase64);
       };
       img.src = base64;
     };
     reader.readAsDataURL(file);
   }
+
+  function showImagePreview(base64) {
+    const preview = document.getElementById('image-preview');
+    preview.style.display = 'block';
+    preview.innerHTML = `
+      <div class="preview-image-container">
+        <img src="${base64}" class="preview-image">
+        <button class="preview-remove" onclick="window.chatWidget.clearImagePreview()">×</button>
+      </div>
+    `;
+    document.getElementById('chat-input').focus();
+  }
+
+  function clearImagePreview() {
+    pendingImage = null;
+    document.getElementById('image-preview').style.display = 'none';
+    document.getElementById('image-preview').innerHTML = '';
+  }
+
+  window.chatWidget = { clearImagePreview };
 
   function connectWS() {
     if (connected) return;
@@ -322,15 +391,20 @@
 
       if (data.type === 'message') {
         if (data.contentType === 'image') {
-          addImageMsg(data.data || data.text, 'staff');
+          addImageMsg(data.data || data.text, 'staff', data.staffName, data.caption, data.msgId);
+        } else if (data.contentType === 'sticker') {
+          addStickerMsg(data.data, 'staff', data.staffName, data.emoji, data.msgId);
+        } else if (data.contentType === 'animation') {
+          addAnimationMsg(data.data, 'staff', data.staffName, data.msgId);
         } else {
-          addMsg(data.text, 'staff', null, data.staffName);
+          addMsg(data.text, 'staff', data.msgId, data.staffName);
         }
       } else if (data.type === 'system') {
         addMsg(data.message, 'sys');
-      } else if (data.type === 'user_info') {
-        // 用户信息（可选处理）
-        console.log('用户信息:', data.user);
+      } else if (data.type === 'message_deleted') {
+        deleteMessage(data.msgId);
+      } else if (data.type === 'message_edited') {
+        editMessage(data.msgId, data.newText);
       }
     };
 
@@ -349,21 +423,40 @@
     const input = document.getElementById('chat-input');
     const text = input.textContent.trim();
 
-    if (!text) return;
+    if (!text && !pendingImage) return;
 
-    addMsg(text, 'user');
+    const msgId = 'msg_' + userId + '_' + (++messageIdCounter);
 
-    if (ws && ws.readyState === 1) {
-      ws.send(JSON.stringify({
-        type: 'chat',
-        contentType: 'text',
-        text: text
-      }));
+    if (pendingImage) {
+      // 发送图片消息（可能带文字）
+      addImageMsg(pendingImage, 'user', null, text, msgId);
+
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({
+          type: 'chat',
+          contentType: 'image',
+          data: pendingImage,
+          caption: text,
+          msgId: msgId
+        }));
+      }
+
+      clearImagePreview();
+    } else {
+      // 纯文本消息
+      addMsg(text, 'user', msgId);
+
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({
+          type: 'chat',
+          contentType: 'text',
+          text: text,
+          msgId: msgId
+        }));
+      }
     }
 
     input.textContent = '';
-
-    // 隐藏 emoji 选择器
     document.getElementById('emoji-picker').style.display = 'none';
   }
 
@@ -372,64 +465,79 @@
     const isUser = from === 'user';
     const isSys = from === 'sys';
 
-    const msgDiv = document.createElement('div');
-    if (msgId) msgDiv.id = msgId;
-    msgDiv.style.cssText = 'margin-bottom:12px;display:flex;justify-content:' + (isUser ? 'flex-end' : 'flex-start');
+    if (!msgId) msgId = 'sys_' + Date.now();
+
+    const msgContainer = document.createElement('div');
+    msgContainer.className = 'message-container ' + from;
+    msgContainer.id = msgId;
+    msgContainer.style.justifyContent = isUser ? 'flex-end' : 'flex-start';
 
     const contentDiv = document.createElement('div');
+    contentDiv.className = 'message-bubble';
     contentDiv.style.cssText = `
-      max-width:70%;
-      padding:10px 14px;
-      border-radius:18px;
-      background:${isSys ? '#fff3cd' : (isUser ? primaryColor : 'white')};
-      color:${isUser ? 'white' : '#333'};
-      box-shadow:0 1px 2px rgba(0,0,0,0.1);
-      word-wrap:break-word;
-      white-space:pre-wrap;
-      font-size:15px;
-      line-height:1.4;
+      background: ${isSys ? '#fff3cd' : (isUser ? primaryColor : 'white')};
+      color: ${isUser ? 'white' : '#333'};
+      box-shadow: 0 1px 2px rgba(0,0,0,0.1);
     `;
 
-    // 添加客服名称
     if (staffName && !isUser && !isSys) {
       const nameSpan = document.createElement('div');
       nameSpan.textContent = staffName;
-      nameSpan.style.cssText = 'font-size:11px;opacity:0.7;margin-bottom:4px';
+      nameSpan.style.cssText = 'font-size:11px;opacity:0.7;margin-bottom:4px;font-weight:bold';
       contentDiv.appendChild(nameSpan);
     }
 
-    // 直接使用 innerText 来保留 emoji 的原生显示
-    // 转义 HTML 特殊字符，但保留 emoji
-    const textSpan = document.createElement('span');
-    textSpan.innerText = text;
-    contentDiv.appendChild(textSpan);
+    const textDiv = document.createElement('div');
+    textDiv.textContent = text;
+    textDiv.className = 'message-text';
+    contentDiv.appendChild(textDiv);
 
-    msgDiv.appendChild(contentDiv);
-    div.appendChild(msgDiv);
+    msgContainer.appendChild(contentDiv);
+
+    // 添加操作按钮（仅用户消息）
+    if (isUser && !isSys) {
+      const actions = document.createElement('div');
+      actions.className = 'message-actions';
+      actions.innerHTML = `
+        <button class="action-btn" onclick="window.chatWidget.editMsg('${msgId}')" title="编辑">✏️</button>
+        <button class="action-btn" onclick="window.chatWidget.deleteMsg('${msgId}')" title="删除">🗑️</button>
+      `;
+      msgContainer.appendChild(actions);
+    }
+
+    div.appendChild(msgContainer);
     div.scrollTop = div.scrollHeight;
+
+    messages.set(msgId, {
+      element: msgContainer,
+      text: text,
+      type: 'text'
+    });
   }
 
-  function addImageMsg(imageSrc, from, staffName) {
+  function addImageMsg(imageSrc, from, staffName, caption, msgId) {
     const div = document.getElementById('chat-messages');
     const isUser = from === 'user';
 
-    const msgDiv = document.createElement('div');
-    msgDiv.style.cssText = 'margin-bottom:12px;display:flex;justify-content:' + (isUser ? 'flex-end' : 'flex-start');
+    if (!msgId) msgId = 'img_' + Date.now();
+
+    const msgContainer = document.createElement('div');
+    msgContainer.className = 'message-container ' + from;
+    msgContainer.id = msgId;
+    msgContainer.style.justifyContent = isUser ? 'flex-end' : 'flex-start';
 
     const contentDiv = document.createElement('div');
+    contentDiv.className = 'message-bubble';
     contentDiv.style.cssText = `
-      max-width:70%;
-      padding:4px;
-      border-radius:12px;
-      background:${isUser ? primaryColor : 'white'};
-      box-shadow:0 1px 2px rgba(0,0,0,0.1);
+      background: ${isUser ? primaryColor : 'white'};
+      box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+      padding: 4px;
     `;
 
-    // 添加客服名称
     if (staffName && !isUser) {
       const nameSpan = document.createElement('div');
       nameSpan.textContent = staffName;
-      nameSpan.style.cssText = 'font-size:11px;opacity:0.7;margin:4px 8px';
+      nameSpan.style.cssText = 'font-size:11px;opacity:0.7;margin:4px 8px;font-weight:bold';
       contentDiv.appendChild(nameSpan);
     }
 
@@ -439,23 +547,223 @@
     img.onclick = () => {
       window.open(imageSrc, '_blank');
     };
-
     contentDiv.appendChild(img);
-    msgDiv.appendChild(contentDiv);
-    div.appendChild(msgDiv);
+
+    if (caption) {
+      const captionDiv = document.createElement('div');
+      captionDiv.className = 'image-caption';
+      captionDiv.textContent = caption;
+      captionDiv.style.color = isUser ? 'white' : '#333';
+      contentDiv.appendChild(captionDiv);
+    }
+
+    msgContainer.appendChild(contentDiv);
+
+    if (isUser) {
+      const actions = document.createElement('div');
+      actions.className = 'message-actions';
+      actions.innerHTML = `
+        <button class="action-btn" onclick="window.chatWidget.deleteMsg('${msgId}')" title="删除">🗑️</button>
+      `;
+      msgContainer.appendChild(actions);
+    }
+
+    div.appendChild(msgContainer);
     div.scrollTop = div.scrollHeight;
+
+    messages.set(msgId, {
+      element: msgContainer,
+      imageSrc: imageSrc,
+      caption: caption,
+      type: 'image'
+    });
   }
 
-  function removeMsg(msgId) {
-    const msg = document.getElementById(msgId);
-    if (msg) msg.remove();
+  function deleteMsg(msgId) {
+    if (!confirm('确定要删除这条消息吗？')) return;
+
+    const msgData = messages.get(msgId);
+    if (!msgData) return;
+
+    // 从界面移除
+    msgData.element.remove();
+    messages.delete(msgId);
+
+    // 通知服务器
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({
+        type: 'delete_message',
+        msgId: msgId
+      }));
+    }
   }
+
+  function deleteMessage(msgId) {
+    const msgData = messages.get(msgId);
+    if (!msgData) return;
+
+    msgData.element.remove();
+    messages.delete(msgId);
+  }
+
+  function editMsg(msgId) {
+    const msgData = messages.get(msgId);
+    if (!msgData || msgData.type !== 'text') return;
+
+    const newText = prompt('编辑消息:', msgData.text);
+    if (!newText || newText === msgData.text) return;
+
+    // 更新界面
+    const textDiv = msgData.element.querySelector('.message-text');
+    textDiv.textContent = newText;
+
+    // 添加已编辑标记
+    let editedMark = msgData.element.querySelector('.message-edited');
+    if (!editedMark) {
+      editedMark = document.createElement('div');
+      editedMark.className = 'message-edited';
+      editedMark.textContent = '已编辑';
+      msgData.element.querySelector('.message-bubble').appendChild(editedMark);
+    }
+
+    msgData.text = newText;
+
+    // 通知服务器
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({
+        type: 'edit_message',
+        msgId: msgId,
+        newText: newText
+      }));
+    }
+  }
+
+  function editMessage(msgId, newText) {
+    const msgData = messages.get(msgId);
+    if (!msgData || msgData.type !== 'text') return;
+
+    const textDiv = msgData.element.querySelector('.message-text');
+    textDiv.textContent = newText;
+
+    let editedMark = msgData.element.querySelector('.message-edited');
+    if (!editedMark) {
+      editedMark = document.createElement('div');
+      editedMark.className = 'message-edited';
+      editedMark.textContent = '已编辑';
+      msgData.element.querySelector('.message-bubble').appendChild(editedMark);
+    }
+
+    msgData.text = newText;
+  }
+
+  function addStickerMsg(stickerUrl, from, staffName, emoji, msgId) {
+    const div = document.getElementById('chat-messages');
+    const isUser = from === 'user';
+
+    if (!msgId) msgId = 'sticker_' + Date.now();
+
+    const msgContainer = document.createElement('div');
+    msgContainer.className = 'message-container ' + from;
+    msgContainer.id = msgId;
+    msgContainer.style.justifyContent = isUser ? 'flex-end' : 'flex-start';
+
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'message-bubble';
+    contentDiv.style.cssText = `
+      background: transparent;
+      padding: 4px;
+    `;
+
+    if (staffName && !isUser) {
+      const nameSpan = document.createElement('div');
+      nameSpan.textContent = staffName;
+      nameSpan.style.cssText = 'font-size:11px;opacity:0.7;margin:4px 8px;font-weight:bold;color:#666';
+      contentDiv.appendChild(nameSpan);
+    }
+
+    const img = document.createElement('img');
+    img.src = stickerUrl;
+    img.style.cssText = 'width:150px;height:150px;object-fit:contain;display:block';
+    img.alt = emoji || '贴纸';
+    contentDiv.appendChild(img);
+
+    msgContainer.appendChild(contentDiv);
+    div.appendChild(msgContainer);
+    div.scrollTop = div.scrollHeight;
+
+    messages.set(msgId, {
+      element: msgContainer,
+      stickerUrl: stickerUrl,
+      type: 'sticker'
+    });
+  }
+
+  function addAnimationMsg(gifUrl, from, staffName, msgId) {
+    const div = document.getElementById('chat-messages');
+    const isUser = from === 'user';
+
+    if (!msgId) msgId = 'gif_' + Date.now();
+
+    const msgContainer = document.createElement('div');
+    msgContainer.className = 'message-container ' + from;
+    msgContainer.id = msgId;
+    msgContainer.style.justifyContent = isUser ? 'flex-end' : 'flex-start';
+
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'message-bubble';
+    contentDiv.style.cssText = `
+      background: ${isUser ? primaryColor : 'white'};
+      box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+      padding: 4px;
+    `;
+
+    if (staffName && !isUser) {
+      const nameSpan = document.createElement('div');
+      nameSpan.textContent = staffName;
+      nameSpan.style.cssText = 'font-size:11px;opacity:0.7;margin:4px 8px;font-weight:bold';
+      contentDiv.appendChild(nameSpan);
+    }
+
+    const img = document.createElement('img');
+    img.src = gifUrl;
+    img.className = 'message-image';
+    img.onclick = () => {
+      window.open(gifUrl, '_blank');
+    };
+    contentDiv.appendChild(img);
+
+    msgContainer.appendChild(contentDiv);
+
+    if (isUser) {
+      const actions = document.createElement('div');
+      actions.className = 'message-actions';
+      actions.innerHTML = `
+        <button class="action-btn" onclick="window.chatWidget.deleteMsg('${msgId}')" title="删除">🗑️</button>
+      `;
+      msgContainer.appendChild(actions);
+    }
+
+    div.appendChild(msgContainer);
+    div.scrollTop = div.scrollHeight;
+
+    messages.set(msgId, {
+      element: msgContainer,
+      gifUrl: gifUrl,
+      type: 'animation'
+    });
+  }
+
+  window.chatWidget = {
+    ...window.chatWidget,
+    deleteMsg,
+    editMsg
+  };
 
   function init() {
     createWidget();
     initEvents();
     setTimeout(() => {
-      addMsg('👋 您好！有什么可以帮您？\n\n支持发送文本、图片、表情 😊', 'sys');
+      addMsg('👋 您好！有什么可以帮您？\n\n支持发送文本、图片、表情\n✏️ 可以编辑和删除已发送的消息', 'sys');
     }, 500);
   }
 

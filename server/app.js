@@ -74,6 +74,10 @@ const userTopics = new Map();
 const topicUsers = new Map();
 // 正在创建话题的用户 (防并发)
 const creatingTopics = new Set();
+// 消息ID映射 (clientMsgId -> {telegramMsgId, userId, topicId})
+const messageIdMap = new Map();
+// Telegram消息ID反向映射 (telegramMsgId -> clientMsgId)
+const telegramMessageMap = new Map();
 
 // 从数据库加载现有映射
 function loadTopicMappings() {
@@ -150,6 +154,42 @@ wss.on('connection', (ws) => {
           await forwardToTelegram(userId, message, user);
         }
       }
+
+      // 删除消息
+      if (message.type === 'delete_message' && userId) {
+        const mapping = messageIdMap.get(message.msgId);
+        if (mapping) {
+          try {
+            await bot.telegram.deleteMessage(GROUP_ID, mapping.telegramMsgId);
+            messageIdMap.delete(message.msgId);
+            telegramMessageMap.delete(mapping.telegramMsgId);
+            console.log(`✅ 删除消息: ${message.msgId} -> Telegram ${mapping.telegramMsgId}`);
+          } catch (err) {
+            console.error('删除消息失败:', err);
+          }
+        }
+      }
+
+      // 编辑消息
+      if (message.type === 'edit_message' && userId) {
+        const mapping = messageIdMap.get(message.msgId);
+        if (mapping) {
+          try {
+            const user = db.prepare('SELECT * FROM users WHERE user_id = ?').get(userId);
+            const displayName = user.username || user.user_id.substring(0, 16);
+
+            await bot.telegram.editMessageText(
+              GROUP_ID,
+              mapping.telegramMsgId,
+              null,
+              `👤 ${displayName}:\n💬 ${message.newText}\n\n✏️ 已编辑`
+            );
+            console.log(`✅ 编辑消息: ${message.msgId} -> Telegram ${mapping.telegramMsgId}`);
+          } catch (err) {
+            console.error('编辑消息失败:', err);
+          }
+        }
+      }
       
     } catch (err) {
       console.error('WebSocket 消息处理错误:', err);
@@ -208,6 +248,8 @@ async function forwardToTelegram(userId, message, user) {
     const displayName = user.username || user.user_id.substring(0, 16);
     const contentType = message.contentType || 'text';
 
+    let result;
+
     // 根据内容类型发送不同消息
     if (contentType === 'image') {
       // 发送图片
@@ -215,22 +257,58 @@ async function forwardToTelegram(userId, message, user) {
       const base64Data = message.data.replace(/^data:image\/\w+;base64,/, '');
       const buffer = Buffer.from(base64Data, 'base64');
 
-      await bot.telegram.sendPhoto(GROUP_ID, {
+      // 使用用户提供的 caption 或默认文本
+      const caption = message.caption
+        ? `👤 ${displayName}:\n💬 ${message.caption}`
+        : `👤 ${displayName} 发送了图片`;
+
+      result = await bot.telegram.sendPhoto(GROUP_ID, {
         source: buffer,
         filename: message.filename || 'image.jpg'
       }, {
-        caption: `👤 ${displayName} 发送了图片`,
+        caption: caption,
         message_thread_id: topicId
       });
 
       console.log(`✅ 转发图片到 Telegram (用户: ${userId})`);
+    } else if (contentType === 'sticker') {
+      // 发送贴纸
+      result = await bot.telegram.sendSticker(GROUP_ID, message.data, {
+        message_thread_id: topicId
+      });
+
+      console.log(`✅ 转发贴纸到 Telegram (用户: ${userId})`);
+    } else if (contentType === 'animation') {
+      // 发送 GIF/动画
+      const base64Data = message.data.replace(/^data:image\/gif;base64,/, '');
+      const buffer = Buffer.from(base64Data, 'base64');
+
+      result = await bot.telegram.sendAnimation(GROUP_ID, {
+        source: buffer,
+        filename: 'animation.gif'
+      }, {
+        message_thread_id: topicId
+      });
+
+      console.log(`✅ 转发 GIF 到 Telegram (用户: ${userId})`);
     } else {
       // 发送文本消息
-      await bot.telegram.sendMessage(GROUP_ID, `👤 ${displayName}:\n💬 ${message.text}`, {
+      result = await bot.telegram.sendMessage(GROUP_ID, `👤 ${displayName}:\n💬 ${message.text}`, {
         message_thread_id: topicId
       });
 
       console.log(`✅ 转发消息到 Telegram (用户: ${userId})`);
+    }
+
+    // 存储消息ID映射
+    if (message.msgId && result && result.message_id) {
+      messageIdMap.set(message.msgId, {
+        telegramMsgId: result.message_id,
+        userId: userId,
+        topicId: topicId
+      });
+      telegramMessageMap.set(result.message_id, message.msgId);
+      console.log(`📝 存储消息映射: ${message.msgId} -> ${result.message_id}`);
     }
 
   } catch (err) {
@@ -320,6 +398,7 @@ if (BOT_TOKEN) {
       const ws = userConnections.get(userId);
       if (ws && ws.readyState === WebSocket.OPEN) {
         const fromName = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name || '客服';
+        const msgId = `staff_${message.message_id}`;
 
         // 判断消息类型
         if (message.photo) {
@@ -338,8 +417,12 @@ if (BOT_TOKEN) {
               contentType: 'image',
               data: fileLink.href,
               caption: message.caption || '',
+              msgId: msgId,
               timestamp: Date.now()
             }));
+
+            // 存储映射（客服消息也要追踪）
+            telegramMessageMap.set(message.message_id, msgId);
 
             console.log(`✅ 转发图片给用户 ${userId}`);
           } catch (err) {
@@ -360,20 +443,57 @@ if (BOT_TOKEN) {
             staffName: fromName,
             contentType: 'text',
             text: message.text,
+            msgId: msgId,
             timestamp: Date.now()
           }));
+
+          // 存储映射
+          telegramMessageMap.set(message.message_id, msgId);
 
           console.log(`✅ 转发文本给用户 ${userId}`);
         } else if (message.sticker) {
           // 贴纸消息
-          ws.send(JSON.stringify({
-            type: 'message',
-            from: 'staff',
-            staffName: fromName,
-            contentType: 'text',
-            text: message.sticker.emoji || '📄 [贴纸]',
-            timestamp: Date.now()
-          }));
+          try {
+            const fileLink = await bot.telegram.getFileLink(message.sticker.file_id);
+
+            ws.send(JSON.stringify({
+              type: 'message',
+              from: 'staff',
+              staffName: fromName,
+              contentType: 'sticker',
+              data: fileLink.href,
+              emoji: message.sticker.emoji || '',
+              msgId: msgId,
+              timestamp: Date.now()
+            }));
+
+            telegramMessageMap.set(message.message_id, msgId);
+
+            console.log(`✅ 转发贴纸给用户 ${userId}`);
+          } catch (err) {
+            console.error('获取贴纸失败:', err);
+          }
+        } else if (message.animation) {
+          // GIF/动画消息
+          try {
+            const fileLink = await bot.telegram.getFileLink(message.animation.file_id);
+
+            ws.send(JSON.stringify({
+              type: 'message',
+              from: 'staff',
+              staffName: fromName,
+              contentType: 'animation',
+              data: fileLink.href,
+              msgId: msgId,
+              timestamp: Date.now()
+            }));
+
+            telegramMessageMap.set(message.message_id, msgId);
+
+            console.log(`✅ 转发 GIF 给用户 ${userId}`);
+          } catch (err) {
+            console.error('获取 GIF 失败:', err);
+          }
         } else {
           // 其他类型消息
           ws.send(JSON.stringify({
@@ -387,6 +507,33 @@ if (BOT_TOKEN) {
         }
       } else {
         console.log(`⚠️ 用户 ${userId} 不在线`);
+      }
+    }
+  });
+
+  // 处理编辑的消息
+  bot.on('edited_message', async (ctx) => {
+    const message = ctx.editedMessage;
+    const messageThreadId = message.message_thread_id;
+
+    if (!messageThreadId) return;
+
+    const userId = topicUsers.get(messageThreadId);
+    if (!userId) return;
+
+    const ws = userConnections.get(userId);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      // 查找对应的客户端消息ID
+      const clientMsgId = telegramMessageMap.get(message.message_id);
+
+      if (clientMsgId && message.text) {
+        ws.send(JSON.stringify({
+          type: 'message_edited',
+          msgId: clientMsgId,
+          newText: message.text
+        }));
+
+        console.log(`✅ 通知用户 ${userId} 消息已编辑: ${clientMsgId}`);
       }
     }
   });
