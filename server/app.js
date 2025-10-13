@@ -132,7 +132,7 @@ wss.on('connection', (ws) => {
       // 聊天消息
       if (message.type === 'chat' && userId) {
         const user = db.prepare('SELECT * FROM users WHERE user_id = ?').get(userId);
-        
+
         // 检查用户权限
         if (user.remaining_days <= 0 && user.remaining_days !== -1) {
           ws.send(JSON.stringify({
@@ -141,13 +141,13 @@ wss.on('connection', (ws) => {
           }));
           return;
         }
-        
+
         // 更新最后访问时间和消息数
         db.prepare('UPDATE users SET last_visit = CURRENT_TIMESTAMP, total_messages = total_messages + 1 WHERE user_id = ?').run(userId);
-        
+
         // 转发到 Telegram
         if (BOT_TOKEN && GROUP_ID) {
-          await forwardToTelegram(userId, message.text, user);
+          await forwardToTelegram(userId, message, user);
         }
       }
       
@@ -187,11 +187,11 @@ async function getOrCreateUser(userId, username = null, email = null) {
   return user;
 }
 
-async function forwardToTelegram(userId, text, user) {
+async function forwardToTelegram(userId, message, user) {
   try {
     // 获取或创建话题
     let topicId = userTopics.get(userId);
-    
+
     if (!topicId && !creatingTopics.has(userId)) {
       topicId = await createUserTopic(userId, user);
     } else if (creatingTopics.has(userId)) {
@@ -199,18 +199,40 @@ async function forwardToTelegram(userId, text, user) {
       await new Promise(resolve => setTimeout(resolve, 200));
       topicId = userTopics.get(userId);
     }
-    
+
     if (!topicId) {
       console.error('❌ 无法获取话题ID');
       return;
     }
-    
-    // 发送消息到 Telegram
+
     const displayName = user.username || user.user_id.substring(0, 16);
-    await bot.telegram.sendMessage(GROUP_ID, `👤 ${displayName}:\n💬 ${text}`, {
-      message_thread_id: topicId
-    });
-    
+    const contentType = message.contentType || 'text';
+
+    // 根据内容类型发送不同消息
+    if (contentType === 'image') {
+      // 发送图片
+      // Base64 转 Buffer
+      const base64Data = message.data.replace(/^data:image\/\w+;base64,/, '');
+      const buffer = Buffer.from(base64Data, 'base64');
+
+      await bot.telegram.sendPhoto(GROUP_ID, {
+        source: buffer,
+        filename: message.filename || 'image.jpg'
+      }, {
+        caption: `👤 ${displayName} 发送了图片`,
+        message_thread_id: topicId
+      });
+
+      console.log(`✅ 转发图片到 Telegram (用户: ${userId})`);
+    } else {
+      // 发送文本消息
+      await bot.telegram.sendMessage(GROUP_ID, `👤 ${displayName}:\n💬 ${message.text}`, {
+        message_thread_id: topicId
+      });
+
+      console.log(`✅ 转发消息到 Telegram (用户: ${userId})`);
+    }
+
   } catch (err) {
     console.error('转发到 Telegram 失败:', err);
   }
@@ -281,33 +303,88 @@ if (BOT_TOKEN) {
     const messageThreadId = message.message_thread_id;
     const fromId = ctx.from.id;
     const botId = ctx.botInfo.id;
-    
+
     // 不处理 Bot 自己的消息
     if (fromId === botId) return;
-    
+
     // 只处理群组话题消息
     if (chatType === 'supergroup' && chatId.toString() === GROUP_ID && messageThreadId) {
       const userId = topicUsers.get(messageThreadId);
-      
+
       if (!userId) {
         console.log(`⚠️ 话题 ${messageThreadId} 没有对应的用户`);
         return;
       }
-      
+
       // 转发给用户
       const ws = userConnections.get(userId);
       if (ws && ws.readyState === WebSocket.OPEN) {
         const fromName = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name || '客服';
-        
-        ws.send(JSON.stringify({
-          type: 'message',
-          from: 'staff',
-          staffName: fromName,
-          text: message.text || '[非文本消息]',
-          timestamp: Date.now()
-        }));
-        
-        console.log(`✅ 转发给用户 ${userId}`);
+
+        // 判断消息类型
+        if (message.photo) {
+          // 图片消息
+          const photos = message.photo;
+          const largestPhoto = photos[photos.length - 1]; // 获取最大尺寸
+
+          try {
+            // 获取图片文件 URL
+            const fileLink = await bot.telegram.getFileLink(largestPhoto.file_id);
+
+            ws.send(JSON.stringify({
+              type: 'message',
+              from: 'staff',
+              staffName: fromName,
+              contentType: 'image',
+              data: fileLink.href,
+              caption: message.caption || '',
+              timestamp: Date.now()
+            }));
+
+            console.log(`✅ 转发图片给用户 ${userId}`);
+          } catch (err) {
+            console.error('获取图片失败:', err);
+            ws.send(JSON.stringify({
+              type: 'message',
+              from: 'staff',
+              staffName: fromName,
+              text: '[图片] (加载失败)',
+              timestamp: Date.now()
+            }));
+          }
+        } else if (message.text) {
+          // 文本消息
+          ws.send(JSON.stringify({
+            type: 'message',
+            from: 'staff',
+            staffName: fromName,
+            contentType: 'text',
+            text: message.text,
+            timestamp: Date.now()
+          }));
+
+          console.log(`✅ 转发文本给用户 ${userId}`);
+        } else if (message.sticker) {
+          // 贴纸消息
+          ws.send(JSON.stringify({
+            type: 'message',
+            from: 'staff',
+            staffName: fromName,
+            contentType: 'text',
+            text: message.sticker.emoji || '📄 [贴纸]',
+            timestamp: Date.now()
+          }));
+        } else {
+          // 其他类型消息
+          ws.send(JSON.stringify({
+            type: 'message',
+            from: 'staff',
+            staffName: fromName,
+            contentType: 'text',
+            text: '[不支持的消息类型]',
+            timestamp: Date.now()
+          }));
+        }
       } else {
         console.log(`⚠️ 用户 ${userId} 不在线`);
       }
