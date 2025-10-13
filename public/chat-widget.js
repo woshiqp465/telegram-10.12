@@ -65,7 +65,7 @@
             <div style="padding:12px 16px">
               <div style="display:flex;gap:8px;align-items:flex-end">
                 <div style="flex:1;position:relative">
-                  <div id="chat-input" contenteditable="true" placeholder="输入消息..." style="min-height:40px;max-height:120px;overflow-y:auto;padding:10px 12px;border:1px solid #e0e0e0;border-radius:20px;outline:none;background:white;line-height:1.5" data-placeholder="输入消息..."></div>
+                  <div id="chat-input" contenteditable="true" placeholder="输入消息..." style="min-height:40px;max-height:120px;overflow-y:auto;padding:10px 12px;border:1px solid #e0e0e0;border-radius:20px;outline:none;background:white;line-height:1.5;font-size:15px" data-placeholder="输入消息..."></div>
                 </div>
                 <button id="chat-send" style="background:${primaryColor};color:white;border:none;border-radius:50%;width:40px;height:40px;cursor:pointer;font-size:18px;flex-shrink:0;transition:opacity 0.2s" onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">➤</button>
               </div>
@@ -94,14 +94,19 @@
         }
         .emoji-item {
           display: inline-block;
-          font-size: 24px;
-          padding: 4px;
+          font-size: 28px;
+          padding: 6px;
           cursor: pointer;
           border-radius: 4px;
           transition: background 0.2s;
+          line-height: 1;
+          width: 40px;
+          height: 40px;
+          text-align: center;
         }
         .emoji-item:hover {
           background: #f0f0f0;
+          transform: scale(1.2);
         }
         .message-image {
           max-width: 250px;
@@ -381,6 +386,8 @@
       box-shadow:0 1px 2px rgba(0,0,0,0.1);
       word-wrap:break-word;
       white-space:pre-wrap;
+      font-size:15px;
+      line-height:1.4;
     `;
 
     // 添加客服名称
@@ -391,9 +398,11 @@
       contentDiv.appendChild(nameSpan);
     }
 
-    // 转义 HTML
-    const textNode = document.createTextNode(text);
-    contentDiv.appendChild(textNode);
+    // 直接使用 innerText 来保留 emoji 的原生显示
+    // 转义 HTML 特殊字符，但保留 emoji
+    const textSpan = document.createElement('span');
+    textSpan.innerText = text;
+    contentDiv.appendChild(textSpan);
 
     msgDiv.appendChild(contentDiv);
     div.appendChild(msgDiv);
