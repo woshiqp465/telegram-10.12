@@ -78,6 +78,10 @@ const creatingTopics = new Set();
 const messageIdMap = new Map();
 // Telegram消息ID反向映射 (telegramMsgId -> clientMsgId)
 const telegramMessageMap = new Map();
+// 正在输入状态追踪 (userId -> {timer, timestamp})
+const typingStatus = new Map();
+// 客服在线状态 (默认在线)
+const staffOnlineStatus = { online: true, count: 0 };
 
 // 从数据库加载现有映射
 function loadTopicMappings() {
