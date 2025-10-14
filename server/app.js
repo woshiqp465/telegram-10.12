@@ -16,6 +16,7 @@ const { v4: uuidv4 } = require('uuid');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { SocksProxyAgent } = require('socks-proxy-agent');
+const https = require('https');
 
 // ==================== 配置 ====================
 
@@ -496,6 +497,45 @@ if (BOT_TOKEN) {
 
   console.log('🌐 已配置代理: socks5://127.0.0.1:1080');
 
+  // 辅助函数：下载Telegram文件并转换为base64
+  async function downloadTelegramFileAsBase64(fileId) {
+    try {
+      // 获取文件链接
+      const fileLink = await bot.telegram.getFileLink(fileId);
+
+      // 通过代理下载文件
+      return new Promise((resolve, reject) => {
+        https.get(fileLink.href, { agent: proxyAgent }, (response) => {
+          const chunks = [];
+
+          response.on('data', (chunk) => {
+            chunks.push(chunk);
+          });
+
+          response.on('end', () => {
+            const buffer = Buffer.concat(chunks);
+            const base64 = buffer.toString('base64');
+
+            // 根据文件类型添加Data URL前缀
+            const contentType = response.headers['content-type'] || 'application/octet-stream';
+            const dataUrl = `data:${contentType};base64,${base64}`;
+
+            resolve(dataUrl);
+          });
+
+          response.on('error', (err) => {
+            reject(err);
+          });
+        }).on('error', (err) => {
+          reject(err);
+        });
+      });
+    } catch (err) {
+      console.error('下载Telegram文件失败:', err);
+      throw err;
+    }
+  }
+
   // 处理群组消息（客服回复）
   bot.on('message', async (ctx) => {
     const message = ctx.message;
@@ -532,15 +572,15 @@ if (BOT_TOKEN) {
           const largestPhoto = photos[photos.length - 1]; // 获取最大尺寸
 
           try {
-            // 获取图片文件 URL
-            const fileLink = await bot.telegram.getFileLink(largestPhoto.file_id);
+            console.log(`📥 开始下载图片: ${largestPhoto.file_id}`);
+            const base64Data = await downloadTelegramFileAsBase64(largestPhoto.file_id);
 
             ws.send(JSON.stringify({
               type: 'message',
               from: 'staff',
               staffName: fromName,
               contentType: 'image',
-              data: fileLink.href,
+              data: base64Data,
               caption: message.caption || '',
               msgId: msgId,
               timestamp: Date.now()
@@ -549,14 +589,16 @@ if (BOT_TOKEN) {
             // 存储映射（客服消息也要追踪）
             telegramMessageMap.set(message.message_id, msgId);
 
-            console.log(`✅ 转发图片给用户 ${userId}`);
+            console.log(`✅ 转发图片给用户 ${userId} (${(base64Data.length / 1024).toFixed(1)}KB)`);
           } catch (err) {
             console.error('获取图片失败:', err);
             ws.send(JSON.stringify({
               type: 'message',
               from: 'staff',
               staffName: fromName,
+              contentType: 'text',
               text: '[图片] (加载失败)',
+              msgId: msgId,
               timestamp: Date.now()
             }));
           }
@@ -579,14 +621,15 @@ if (BOT_TOKEN) {
         } else if (message.sticker) {
           // 贴纸消息
           try {
-            const fileLink = await bot.telegram.getFileLink(message.sticker.file_id);
+            console.log(`📥 开始下载贴纸: ${message.sticker.file_id}`);
+            const base64Data = await downloadTelegramFileAsBase64(message.sticker.file_id);
 
             ws.send(JSON.stringify({
               type: 'message',
               from: 'staff',
               staffName: fromName,
               contentType: 'sticker',
-              data: fileLink.href,
+              data: base64Data,
               emoji: message.sticker.emoji || '',
               msgId: msgId,
               timestamp: Date.now()
@@ -594,30 +637,51 @@ if (BOT_TOKEN) {
 
             telegramMessageMap.set(message.message_id, msgId);
 
-            console.log(`✅ 转发贴纸给用户 ${userId}`);
+            console.log(`✅ 转发贴纸给用户 ${userId} (${(base64Data.length / 1024).toFixed(1)}KB)`);
           } catch (err) {
             console.error('获取贴纸失败:', err);
+            // 发送错误提示
+            ws.send(JSON.stringify({
+              type: 'message',
+              from: 'staff',
+              staffName: fromName,
+              contentType: 'text',
+              text: `[贴纸] ${message.sticker.emoji || '📄'} (加载失败)`,
+              msgId: msgId,
+              timestamp: Date.now()
+            }));
           }
         } else if (message.animation) {
           // GIF/动画消息
           try {
-            const fileLink = await bot.telegram.getFileLink(message.animation.file_id);
+            console.log(`📥 开始下载GIF: ${message.animation.file_id}`);
+            const base64Data = await downloadTelegramFileAsBase64(message.animation.file_id);
 
             ws.send(JSON.stringify({
               type: 'message',
               from: 'staff',
               staffName: fromName,
               contentType: 'animation',
-              data: fileLink.href,
+              data: base64Data,
               msgId: msgId,
               timestamp: Date.now()
             }));
 
             telegramMessageMap.set(message.message_id, msgId);
 
-            console.log(`✅ 转发 GIF 给用户 ${userId}`);
+            console.log(`✅ 转发 GIF 给用户 ${userId} (${(base64Data.length / 1024).toFixed(1)}KB)`);
           } catch (err) {
             console.error('获取 GIF 失败:', err);
+            // 发送错误提示
+            ws.send(JSON.stringify({
+              type: 'message',
+              from: 'staff',
+              staffName: fromName,
+              contentType: 'text',
+              text: '[GIF动图] (加载失败)',
+              msgId: msgId,
+              timestamp: Date.now()
+            }));
           }
         } else {
           // 其他类型消息
