@@ -17,6 +17,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { SocksProxyAgent } = require('socks-proxy-agent');
 const https = require('https');
+const crypto = require('crypto');
 
 // ==================== 配置 ====================
 
@@ -497,36 +498,51 @@ if (BOT_TOKEN) {
 
   console.log('🌐 已配置代理: socks5://127.0.0.1:1080');
 
-  // 辅助函数：下载Telegram文件并转换为base64
-  async function downloadTelegramFileAsBase64(fileId) {
+  // 创建uploads目录
+  const uploadsDir = path.join(__dirname, '..', 'public', 'uploads');
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+    console.log('✅ 创建uploads目录:', uploadsDir);
+  }
+
+  // 辅助函数：下载Telegram文件并保存到本地，返回HTTP URL
+  async function downloadAndSaveTelegramFile(fileId, fileType = 'file') {
     try {
       // 获取文件链接
       const fileLink = await bot.telegram.getFileLink(fileId);
 
-      // 通过代理下载文件
+      // 生成唯一文件名
+      const hash = crypto.createHash('md5').update(fileId).digest('hex');
+      const ext = path.extname(fileLink.pathname) || getExtensionByType(fileType);
+      const filename = `${hash}${ext}`;
+      const filepath = path.join(uploadsDir, filename);
+
+      // 如果文件已存在，直接返回URL
+      if (fs.existsSync(filepath)) {
+        console.log(`✅ 文件已缓存: ${filename}`);
+        return `http://192.168.9.159:3000/uploads/${filename}`;
+      }
+
+      // 通过代理下载文件并保存
       return new Promise((resolve, reject) => {
+        const fileStream = fs.createWriteStream(filepath);
+
         https.get(fileLink.href, { agent: proxyAgent }, (response) => {
-          const chunks = [];
+          response.pipe(fileStream);
 
-          response.on('data', (chunk) => {
-            chunks.push(chunk);
+          fileStream.on('finish', () => {
+            fileStream.close();
+            const fileSize = fs.statSync(filepath).size;
+            console.log(`✅ 文件已保存: ${filename} (${(fileSize / 1024).toFixed(1)}KB)`);
+            resolve(`http://192.168.9.159:3000/uploads/${filename}`);
           });
 
-          response.on('end', () => {
-            const buffer = Buffer.concat(chunks);
-            const base64 = buffer.toString('base64');
-
-            // 根据文件类型添加Data URL前缀
-            const contentType = response.headers['content-type'] || 'application/octet-stream';
-            const dataUrl = `data:${contentType};base64,${base64}`;
-
-            resolve(dataUrl);
-          });
-
-          response.on('error', (err) => {
+          fileStream.on('error', (err) => {
+            fs.unlink(filepath, () => {}); // 删除不完整的文件
             reject(err);
           });
         }).on('error', (err) => {
+          fs.unlink(filepath, () => {});
           reject(err);
         });
       });
@@ -534,6 +550,19 @@ if (BOT_TOKEN) {
       console.error('下载Telegram文件失败:', err);
       throw err;
     }
+  }
+
+  // 根据文件类型获取扩展名
+  function getExtensionByType(fileType) {
+    const extensions = {
+      'photo': '.jpg',
+      'sticker': '.webp',
+      'animation': '.gif',
+      'video': '.mp4',
+      'audio': '.mp3',
+      'document': '.bin'
+    };
+    return extensions[fileType] || '.bin';
   }
 
   // 处理群组消息（客服回复）
@@ -573,14 +602,14 @@ if (BOT_TOKEN) {
 
           try {
             console.log(`📥 开始下载图片: ${largestPhoto.file_id}`);
-            const base64Data = await downloadTelegramFileAsBase64(largestPhoto.file_id);
+            const imageUrl = await downloadAndSaveTelegramFile(largestPhoto.file_id, 'photo');
 
             ws.send(JSON.stringify({
               type: 'message',
               from: 'staff',
               staffName: fromName,
               contentType: 'image',
-              data: base64Data,
+              data: imageUrl,
               caption: message.caption || '',
               msgId: msgId,
               timestamp: Date.now()
@@ -589,7 +618,7 @@ if (BOT_TOKEN) {
             // 存储映射（客服消息也要追踪）
             telegramMessageMap.set(message.message_id, msgId);
 
-            console.log(`✅ 转发图片给用户 ${userId} (${(base64Data.length / 1024).toFixed(1)}KB)`);
+            console.log(`✅ 转发图片给用户 ${userId}: ${imageUrl}`);
           } catch (err) {
             console.error('获取图片失败:', err);
             ws.send(JSON.stringify({
@@ -622,14 +651,14 @@ if (BOT_TOKEN) {
           // 贴纸消息
           try {
             console.log(`📥 开始下载贴纸: ${message.sticker.file_id}`);
-            const base64Data = await downloadTelegramFileAsBase64(message.sticker.file_id);
+            const stickerUrl = await downloadAndSaveTelegramFile(message.sticker.file_id, 'sticker');
 
             ws.send(JSON.stringify({
               type: 'message',
               from: 'staff',
               staffName: fromName,
               contentType: 'sticker',
-              data: base64Data,
+              data: stickerUrl,
               emoji: message.sticker.emoji || '',
               msgId: msgId,
               timestamp: Date.now()
@@ -637,7 +666,7 @@ if (BOT_TOKEN) {
 
             telegramMessageMap.set(message.message_id, msgId);
 
-            console.log(`✅ 转发贴纸给用户 ${userId} (${(base64Data.length / 1024).toFixed(1)}KB)`);
+            console.log(`✅ 转发贴纸给用户 ${userId}: ${stickerUrl}`);
           } catch (err) {
             console.error('获取贴纸失败:', err);
             // 发送错误提示
@@ -655,21 +684,21 @@ if (BOT_TOKEN) {
           // GIF/动画消息
           try {
             console.log(`📥 开始下载GIF: ${message.animation.file_id}`);
-            const base64Data = await downloadTelegramFileAsBase64(message.animation.file_id);
+            const gifUrl = await downloadAndSaveTelegramFile(message.animation.file_id, 'animation');
 
             ws.send(JSON.stringify({
               type: 'message',
               from: 'staff',
               staffName: fromName,
               contentType: 'animation',
-              data: base64Data,
+              data: gifUrl,
               msgId: msgId,
               timestamp: Date.now()
             }));
 
             telegramMessageMap.set(message.message_id, msgId);
 
-            console.log(`✅ 转发 GIF 给用户 ${userId} (${(base64Data.length / 1024).toFixed(1)}KB)`);
+            console.log(`✅ 转发 GIF 给用户 ${userId}: ${gifUrl}`);
           } catch (err) {
             console.error('获取 GIF 失败:', err);
             // 发送错误提示
