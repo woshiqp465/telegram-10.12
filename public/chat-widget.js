@@ -22,6 +22,8 @@
   let connected = false;
   let messageIdCounter = 0;
   const messages = new Map(); // 存储所有消息 {msgId -> {data, element}}
+  let typingTimer = null;
+  let isTyping = false;
 
   // Emoji 列表
   const emojis = ['😀','😃','😄','😁','😆','😅','🤣','😂','🙂','🙃','😉','😊','😇','🥰','😍','🤩','😘','😗','☺️','😚','😙','🥲','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🤫','🤔','🤐','🤨','😐','😑','😶','😏','😒','🙄','😬','🤥','😌','😔','😪','🤤','😴','😷','🤒','🤕','🤢','🤮','🤧','🥵','🥶','😵','🤯','🤠','🥳','😎','🤓','🧐','😕','😟','🙁','☹️','😮','😯','😲','😳','🥺','😦','😧','😨','😰','😥','😢','😭','😱','😖','😣','😞','😓','😩','😫','🥱','😤','😡','😠','🤬','👍','👎','👊','✊','🤛','🤜','🤞','✌️','🤟','🤘','👌','🤏','👈','👉','👆','👇','☝️','✋','🤚','🖐️','🖖','👋','🤙','💪','🙏','✍️','💅','🤳','❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','❣️','💕','💞','💓','💗','💖','💘','💝'];
@@ -265,6 +267,7 @@
       if (win.style.display === 'none') {
         win.style.display = 'flex';
         document.getElementById('chat-input').focus();
+        clearUnreadCount();
         connectWS();
       } else {
         win.style.display = 'none';
@@ -283,6 +286,36 @@
         e.preventDefault();
         sendMsg();
       }
+    });
+
+    // 监听输入事件，发送typing状态
+    inputDiv.addEventListener('input', () => {
+      if (!connected) return;
+
+      // 如果还没有开始typing，发送typing_start
+      if (!isTyping) {
+        isTyping = true;
+        if (ws && ws.readyState === 1) {
+          ws.send(JSON.stringify({
+            type: 'typing_start',
+            userId: userId
+          }));
+        }
+      }
+
+      // 清除之前的定时器
+      clearTimeout(typingTimer);
+
+      // 3秒后发送typing_stop
+      typingTimer = setTimeout(() => {
+        isTyping = false;
+        if (ws && ws.readyState === 1) {
+          ws.send(JSON.stringify({
+            type: 'typing_stop',
+            userId: userId
+          }));
+        }
+      }, 3000);
     });
 
     inputDiv.addEventListener('paste', handlePaste);
@@ -461,6 +494,12 @@
         deleteMessage(data.msgId);
       } else if (data.type === 'message_edited') {
         editMessage(data.msgId, data.newText);
+      } else if (data.type === 'typing_start') {
+        showTypingIndicator();
+      } else if (data.type === 'typing_stop') {
+        hideTypingIndicator();
+      } else if (data.type === 'unread_count') {
+        updateUnreadBadge(data.count);
       }
     };
 
@@ -480,6 +519,18 @@
     const text = input.textContent.trim();
 
     if (!text && !pendingImage) return;
+
+    // 停止typing状态
+    if (isTyping) {
+      clearTimeout(typingTimer);
+      isTyping = false;
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({
+          type: 'typing_stop',
+          userId: userId
+        }));
+      }
+    }
 
     const msgId = 'msg_' + userId + '_' + (++messageIdCounter);
 
@@ -837,6 +888,57 @@
       gifUrl: gifUrl,
       type: 'animation'
     });
+  }
+
+  // Typing指示器相关函数
+  let typingIndicatorTimer = null;
+
+  function showTypingIndicator() {
+    const indicator = document.getElementById('typing-indicator');
+    if (indicator) {
+      indicator.style.display = 'block';
+      const messagesDiv = document.getElementById('chat-messages');
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+      // 自动隐藏（防止服务器未发送stop事件）
+      clearTimeout(typingIndicatorTimer);
+      typingIndicatorTimer = setTimeout(() => {
+        hideTypingIndicator();
+      }, 10000); // 10秒后自动隐藏
+    }
+  }
+
+  function hideTypingIndicator() {
+    const indicator = document.getElementById('typing-indicator');
+    if (indicator) {
+      indicator.style.display = 'none';
+    }
+    clearTimeout(typingIndicatorTimer);
+  }
+
+  // 未读消息徽章
+  function updateUnreadBadge(count) {
+    unreadCount = count;
+    const badge = document.getElementById('unread-badge');
+    if (badge) {
+      if (count > 0) {
+        badge.textContent = count > 99 ? '99+' : count;
+        badge.style.display = 'block';
+      } else {
+        badge.style.display = 'none';
+      }
+    }
+  }
+
+  // 聊天窗口打开时清除未读计数
+  function clearUnreadCount() {
+    updateUnreadBadge(0);
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({
+        type: 'mark_read',
+        userId: userId
+      }));
+    }
   }
 
   window.chatWidget = {

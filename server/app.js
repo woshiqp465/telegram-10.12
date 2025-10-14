@@ -47,6 +47,28 @@ db.pragma('journal_mode = WAL'); // 性能优化
 
 console.log('📦 数据库连接成功:', dbPath);
 
+// 创建聊天历史表
+db.exec(`
+  CREATE TABLE IF NOT EXISTS chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id VARCHAR(255) NOT NULL,
+    message_id VARCHAR(255) NOT NULL,
+    message_type VARCHAR(50) NOT NULL,
+    content TEXT,
+    content_type VARCHAR(50) DEFAULT 'text',
+    from_staff BOOLEAN DEFAULT 0,
+    staff_name VARCHAR(255),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    read_at DATETIME,
+    UNIQUE(user_id, message_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_chat_messages_user_id ON chat_messages(user_id);
+  CREATE INDEX IF NOT EXISTS idx_chat_messages_created_at ON chat_messages(created_at);
+`);
+
+console.log('✅ 聊天历史表已就绪');
+
 // ==================== Express 应用 ====================
 
 const app = express();
@@ -82,6 +104,8 @@ const telegramMessageMap = new Map();
 const typingStatus = new Map();
 // 客服在线状态 (默认在线)
 const staffOnlineStatus = { online: true, count: 0 };
+// 未读消息计数 (userId -> count)
+const unreadCounts = new Map();
 
 // 从数据库加载现有映射
 function loadTopicMappings() {
@@ -127,13 +151,22 @@ wss.on('connection', (ws) => {
             isActive: user.is_active === 1,
           }
         }));
-        
+
+        // 发送未读消息计数
+        const unreadCount = unreadCounts.get(userId) || 0;
+        if (unreadCount > 0) {
+          ws.send(JSON.stringify({
+            type: 'unread_count',
+            count: unreadCount
+          }));
+        }
+
         // 加载历史消息（从 Telegram 获取）
         const topicId = userTopics.get(userId);
         if (topicId && BOT_TOKEN) {
           // TODO: 从 Telegram 获取历史消息
         }
-        
+
         return;
       }
       
@@ -194,7 +227,55 @@ wss.on('connection', (ws) => {
           }
         }
       }
-      
+
+      // 用户正在输入
+      if (message.type === 'typing_start' && userId) {
+        const topicId = userTopics.get(userId);
+        if (topicId && BOT_TOKEN) {
+          try {
+            // 向Telegram发送"正在输入"动作
+            await bot.telegram.sendChatAction(GROUP_ID, 'typing', {
+              message_thread_id: topicId
+            });
+
+            // 记录typing状态
+            if (typingStatus.has(userId)) {
+              clearTimeout(typingStatus.get(userId).timer);
+            }
+
+            // 设置自动清除定时器
+            const timer = setTimeout(() => {
+              typingStatus.delete(userId);
+            }, 10000); // 10秒后自动清除
+
+            typingStatus.set(userId, {
+              timer,
+              timestamp: Date.now()
+            });
+
+            console.log(`⌨️ 用户 ${userId} 正在输入`);
+          } catch (err) {
+            console.error('发送typing动作失败:', err);
+          }
+        }
+      }
+
+      // 用户停止输入
+      if (message.type === 'typing_stop' && userId) {
+        if (typingStatus.has(userId)) {
+          clearTimeout(typingStatus.get(userId).timer);
+          typingStatus.delete(userId);
+          console.log(`⏸️ 用户 ${userId} 停止输入`);
+        }
+      }
+
+      // 标记已读
+      if (message.type === 'mark_read' && userId) {
+        // 清除未读计数
+        unreadCounts.delete(userId);
+        console.log(`✓ 用户 ${userId} 标记消息为已读`);
+      }
+
     } catch (err) {
       console.error('WebSocket 消息处理错误:', err);
     }
@@ -315,6 +396,15 @@ async function forwardToTelegram(userId, message, user) {
       console.log(`📝 存储消息映射: ${message.msgId} -> ${result.message_id}`);
     }
 
+    // 保存到历史记录
+    if (message.msgId) {
+      const content = contentType === 'text' ? message.text :
+                     contentType === 'image' ? (message.caption || '[图片]') :
+                     contentType === 'sticker' ? '[贴纸]' :
+                     contentType === 'animation' ? '[动画]' : '';
+      saveMessageToHistory(userId, message.msgId, contentType, content, false, null);
+    }
+
   } catch (err) {
     console.error('转发到 Telegram 失败:', err);
   }
@@ -322,26 +412,26 @@ async function forwardToTelegram(userId, message, user) {
 
 async function createUserTopic(userId, user) {
   if (!BOT_TOKEN || !GROUP_ID) return null;
-  
+
   creatingTopics.add(userId);
-  
+
   try {
     const displayName = user.username || `用户${userId.substring(0, 8)}`;
     const topicName = `用户 - ${displayName}`;
-    
+
     console.log(`📝 创建话题: ${topicName}`);
-    
+
     const topic = await bot.telegram.createForumTopic(GROUP_ID, topicName);
     const topicId = topic.message_thread_id;
-    
+
     // 保存映射
     userTopics.set(userId, topicId);
     topicUsers.set(topicId, userId);
-    
+
     db.prepare('INSERT OR REPLACE INTO user_topics (user_id, topic_id, topic_name) VALUES (?, ?, ?)').run(userId, topicId, topicName);
-    
+
     // 发送欢迎消息
-    await bot.telegram.sendMessage(GROUP_ID, 
+    await bot.telegram.sendMessage(GROUP_ID,
       `👋 新用户咨询\n\n` +
       `👤 用户: ${displayName}\n` +
       `🆔 ID: ${userId}\n` +
@@ -349,15 +439,44 @@ async function createUserTopic(userId, user) {
       `💬 客服在此回复，消息将自动发送给用户`,
       { message_thread_id: topicId }
     );
-    
+
     console.log(`✅ 话题创建成功: ${topicId}`);
     return topicId;
-    
+
   } catch (err) {
     console.error('创建话题失败:', err);
     return null;
   } finally {
     creatingTopics.delete(userId);
+  }
+}
+
+// 保存消息到历史记录
+function saveMessageToHistory(userId, msgId, contentType, content, fromStaff = false, staffName = null) {
+  try {
+    db.prepare(`
+      INSERT OR IGNORE INTO chat_messages (user_id, message_id, message_type, content_type, content, from_staff, staff_name)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(userId, msgId, 'chat', contentType, content, fromStaff ? 1 : 0, staffName);
+  } catch (err) {
+    console.error('保存消息历史失败:', err);
+  }
+}
+
+// 获取聊天历史
+function getChatHistory(userId, limit = 50) {
+  try {
+    const messages = db.prepare(`
+      SELECT * FROM chat_messages
+      WHERE user_id = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(userId, limit);
+
+    return messages.reverse(); // 返回从旧到新的顺序
+  } catch (err) {
+    console.error('获取聊天历史失败:', err);
+    return [];
   }
 }
 
@@ -400,7 +519,9 @@ if (BOT_TOKEN) {
 
       // 转发给用户
       const ws = userConnections.get(userId);
-      if (ws && ws.readyState === WebSocket.OPEN) {
+      const isUserOnline = ws && ws.readyState === WebSocket.OPEN;
+
+      if (isUserOnline) {
         const fromName = ctx.from.username ? `@${ctx.from.username}` : ctx.from.first_name || '客服';
         const msgId = `staff_${message.message_id}`;
 
@@ -509,8 +630,20 @@ if (BOT_TOKEN) {
             timestamp: Date.now()
           }));
         }
+
+        // 保存客服消息到历史记录
+        const staffMsgContentType = message.photo ? 'image' :
+                           message.text ? 'text' :
+                           message.sticker ? 'sticker' :
+                           message.animation ? 'animation' : 'text';
+        const staffMsgContent = message.text || (message.caption || '') || `[${staffMsgContentType}]`;
+        saveMessageToHistory(userId, msgId, staffMsgContentType, staffMsgContent, true, fromName);
+
       } else {
-        console.log(`⚠️ 用户 ${userId} 不在线`);
+        // 用户不在线，增加未读计数
+        const currentCount = unreadCounts.get(userId) || 0;
+        unreadCounts.set(userId, currentCount + 1);
+        console.log(`⚠️ 用户 ${userId} 不在线，未读消息: ${currentCount + 1}`);
       }
     }
   });
