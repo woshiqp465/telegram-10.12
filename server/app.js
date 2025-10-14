@@ -505,6 +505,29 @@ if (BOT_TOKEN) {
     console.log('✅ 创建uploads目录:', uploadsDir);
   }
 
+  // 辅助函数：将WebM/WebP转换为PNG
+  async function convertToPNG(inputPath, outputPath) {
+    try {
+      const sharp = require('sharp');
+
+      // 读取文件的第一帧并转换为PNG
+      await sharp(inputPath, { animated: false })
+        .png()
+        .toFile(outputPath);
+
+      const fileSize = fs.statSync(outputPath).size;
+      console.log(`✅ 已转换为PNG: ${path.basename(outputPath)} (${(fileSize / 1024).toFixed(1)}KB)`);
+
+      // 删除原始文件
+      fs.unlinkSync(inputPath);
+
+      return outputPath;
+    } catch (err) {
+      console.error('转换图片格式失败:', err);
+      throw err;
+    }
+  }
+
   // 辅助函数：下载Telegram文件并保存到本地，返回HTTP URL
   async function downloadAndSaveTelegramFile(fileId, fileType = 'file') {
     try {
@@ -517,14 +540,19 @@ if (BOT_TOKEN) {
       const filename = `${hash}${ext}`;
       const filepath = path.join(uploadsDir, filename);
 
-      // 如果文件已存在，直接返回URL
-      if (fs.existsSync(filepath)) {
-        console.log(`✅ 文件已缓存: ${filename}`);
-        return `http://192.168.9.159:3000/uploads/${filename}`;
+      // 对于WebM/WebP格式，检查是否已存在转换后的PNG文件
+      const needsConversion = (ext === '.webm' || ext === '.webp');
+      const finalFilename = needsConversion ? `${hash}.png` : filename;
+      const finalFilepath = needsConversion ? path.join(uploadsDir, finalFilename) : filepath;
+
+      // 如果最终文件已存在，直接返回URL
+      if (fs.existsSync(finalFilepath)) {
+        console.log(`✅ 文件已缓存: ${finalFilename}`);
+        return `http://192.168.9.159:3000/uploads/${finalFilename}`;
       }
 
       // 通过代理下载文件并保存
-      return new Promise((resolve, reject) => {
+      await new Promise((resolve, reject) => {
         const fileStream = fs.createWriteStream(filepath);
 
         https.get(fileLink.href, { agent: proxyAgent }, (response) => {
@@ -534,7 +562,7 @@ if (BOT_TOKEN) {
             fileStream.close();
             const fileSize = fs.statSync(filepath).size;
             console.log(`✅ 文件已保存: ${filename} (${(fileSize / 1024).toFixed(1)}KB)`);
-            resolve(`http://192.168.9.159:3000/uploads/${filename}`);
+            resolve();
           });
 
           fileStream.on('error', (err) => {
@@ -546,6 +574,15 @@ if (BOT_TOKEN) {
           reject(err);
         });
       });
+
+      // 如果需要转换格式
+      if (needsConversion) {
+        console.log(`🔄 开始转换格式: ${ext} -> PNG`);
+        await convertToPNG(filepath, finalFilepath);
+      }
+
+      return `http://192.168.9.159:3000/uploads/${finalFilename}`;
+
     } catch (err) {
       console.error('下载Telegram文件失败:', err);
       throw err;
