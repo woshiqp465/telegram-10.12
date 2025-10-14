@@ -531,8 +531,13 @@ if (BOT_TOKEN) {
   // 辅助函数：下载Telegram文件并保存到本地，返回HTTP URL
   async function downloadAndSaveTelegramFile(fileId, fileType = 'file') {
     try {
-      // 获取文件链接
-      const fileLink = await bot.telegram.getFileLink(fileId);
+      // 获取文件链接（设置30秒超时）
+      const fileLink = await Promise.race([
+        bot.telegram.getFileLink(fileId),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('获取文件链接超时')), 30000)
+        )
+      ]);
 
       // 生成唯一文件名
       const hash = crypto.createHash('md5').update(fileId).digest('hex');
@@ -551,40 +556,55 @@ if (BOT_TOKEN) {
         return `http://192.168.9.159:3000/uploads/${finalFilename}`;
       }
 
-      // 通过代理下载文件并保存
-      await new Promise((resolve, reject) => {
-        const fileStream = fs.createWriteStream(filepath);
-
-        https.get(fileLink.href, { agent: proxyAgent }, (response) => {
-          response.pipe(fileStream);
-
-          fileStream.on('finish', () => {
+      // 通过代理下载文件并保存（设置60秒超时）
+      await Promise.race([
+        new Promise((resolve, reject) => {
+          const fileStream = fs.createWriteStream(filepath);
+          let downloadTimeout = setTimeout(() => {
             fileStream.close();
-            const fileSize = fs.statSync(filepath).size;
-            console.log(`✅ 文件已保存: ${filename} (${(fileSize / 1024).toFixed(1)}KB)`);
-            resolve();
-          });
+            fs.unlink(filepath, () => {});
+            reject(new Error('文件下载超时'));
+          }, 60000);
 
-          fileStream.on('error', (err) => {
-            fs.unlink(filepath, () => {}); // 删除不完整的文件
+          https.get(fileLink.href, { agent: proxyAgent }, (response) => {
+            response.pipe(fileStream);
+
+            fileStream.on('finish', () => {
+              clearTimeout(downloadTimeout);
+              fileStream.close();
+              const fileSize = fs.statSync(filepath).size;
+              console.log(`✅ 文件已保存: ${filename} (${(fileSize / 1024).toFixed(1)}KB)`);
+              resolve();
+            });
+
+            fileStream.on('error', (err) => {
+              clearTimeout(downloadTimeout);
+              fs.unlink(filepath, () => {}); // 删除不完整的文件
+              reject(err);
+            });
+          }).on('error', (err) => {
+            clearTimeout(downloadTimeout);
+            fs.unlink(filepath, () => {});
             reject(err);
           });
-        }).on('error', (err) => {
-          fs.unlink(filepath, () => {});
-          reject(err);
-        });
-      });
+        })
+      ]);
 
-      // 如果需要转换格式
+      // 如果需要转换格式（设置30秒超时）
       if (needsConversion) {
         console.log(`🔄 开始转换格式: ${ext} -> PNG`);
-        await convertToPNG(filepath, finalFilepath);
+        await Promise.race([
+          convertToPNG(filepath, finalFilepath),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('格式转换超时')), 30000)
+          )
+        ]);
       }
 
       return `http://192.168.9.159:3000/uploads/${finalFilename}`;
 
     } catch (err) {
-      console.error('下载Telegram文件失败:', err);
+      console.error('下载Telegram文件失败:', err.message || err);
       throw err;
     }
   }
