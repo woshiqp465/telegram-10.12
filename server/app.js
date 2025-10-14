@@ -829,7 +829,153 @@ if (BOT_TOKEN) {
       }
     }
   });
-  
+
+  // /del 命令: 删除消息（需要回复要删除的消息）
+  bot.command('del', async (ctx) => {
+    const message = ctx.message;
+    const messageThreadId = message.message_thread_id;
+
+    // 检查是否在话题中
+    if (!messageThreadId) {
+      return ctx.reply('⚠️ 请在用户话题中使用此命令');
+    }
+
+    // 检查是否是回复消息
+    if (!message.reply_to_message) {
+      return ctx.reply('⚠️ 请回复要删除的消息，然后使用 /del 命令');
+    }
+
+    const targetMessageId = message.reply_to_message.message_id;
+    const userId = topicUsers.get(messageThreadId);
+
+    if (!userId) {
+      return ctx.reply('⚠️ 未找到对应的用户');
+    }
+
+    try {
+      // 1. 查找对应的客户端消息ID
+      const clientMsgId = telegramMessageMap.get(targetMessageId);
+
+      // 2. 删除 Telegram 中的消息
+      await bot.telegram.deleteMessage(GROUP_ID, targetMessageId);
+      console.log(`✅ 已删除 Telegram 消息: ${targetMessageId}`);
+
+      // 3. 通知客户端删除消息
+      if (clientMsgId) {
+        const ws = userConnections.get(userId);
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: 'message_deleted',
+            msgId: clientMsgId
+          }));
+          console.log(`✅ 已通知客户端删除消息: ${clientMsgId}`);
+        }
+
+        // 4. 清除消息映射
+        telegramMessageMap.delete(targetMessageId);
+        messageIdMap.delete(clientMsgId);
+      }
+
+      // 5. 删除 Bot 自己的命令消息（保持聊天界面整洁）
+      await ctx.deleteMessage();
+
+      console.log(`🗑️ 删除完成: Telegram ${targetMessageId} -> 客户端 ${clientMsgId || '(无映射)'}`);
+
+    } catch (err) {
+      console.error('删除消息失败:', err);
+
+      // 错误提示
+      if (err.description && err.description.includes('not enough rights')) {
+        await ctx.reply('❌ 删除失败: Bot 没有删除消息的权限，请确保 Bot 是群组管理员');
+      } else if (err.description && err.description.includes('message to delete not found')) {
+        await ctx.reply('❌ 删除失败: 消息不存在或已被删除');
+      } else {
+        await ctx.reply(`❌ 删除失败: ${err.message || '未知错误'}`);
+      }
+    }
+  });
+
+  // /delmulti 命令: 批量删除最近N条消息（需要提供数量）
+  bot.command('delmulti', async (ctx) => {
+    const message = ctx.message;
+    const messageThreadId = message.message_thread_id;
+
+    // 检查是否在话题中
+    if (!messageThreadId) {
+      return ctx.reply('⚠️ 请在用户话题中使用此命令');
+    }
+
+    // 解析要删除的消息数量
+    const args = message.text.split(' ');
+    const count = parseInt(args[1]);
+
+    if (!count || count < 1 || count > 20) {
+      return ctx.reply('⚠️ 请指定要删除的消息数量（1-20）\n用法: /delmulti 5');
+    }
+
+    const userId = topicUsers.get(messageThreadId);
+    if (!userId) {
+      return ctx.reply('⚠️ 未找到对应的用户');
+    }
+
+    try {
+      // 获取最近的消息（从映射中找出属于该用户的消息）
+      const userMessages = Array.from(telegramMessageMap.entries())
+        .filter(([telegramMsgId, clientMsgId]) => {
+          const mapping = messageIdMap.get(clientMsgId);
+          return mapping && mapping.userId === userId;
+        })
+        .slice(-count); // 获取最近N条
+
+      if (userMessages.length === 0) {
+        return ctx.reply('⚠️ 没有找到可删除的消息');
+      }
+
+      let successCount = 0;
+      let failCount = 0;
+
+      // 批量删除
+      for (const [telegramMsgId, clientMsgId] of userMessages) {
+        try {
+          // 删除 Telegram 消息
+          await bot.telegram.deleteMessage(GROUP_ID, telegramMsgId);
+
+          // 通知客户端
+          const ws = userConnections.get(userId);
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+              type: 'message_deleted',
+              msgId: clientMsgId
+            }));
+          }
+
+          // 清除映射
+          telegramMessageMap.delete(telegramMsgId);
+          messageIdMap.delete(clientMsgId);
+
+          successCount++;
+          console.log(`✅ 批量删除: ${telegramMsgId} -> ${clientMsgId}`);
+
+          // 避免触发速率限制
+          await new Promise(resolve => setTimeout(resolve, 100));
+
+        } catch (err) {
+          failCount++;
+          console.error(`删除消息 ${telegramMsgId} 失败:`, err.message);
+        }
+      }
+
+      // 删除命令消息
+      await ctx.deleteMessage();
+
+      console.log(`🗑️ 批量删除完成: 成功 ${successCount} 条, 失败 ${failCount} 条`);
+
+    } catch (err) {
+      console.error('批量删除失败:', err);
+      await ctx.reply(`❌ 批量删除失败: ${err.message || '未知错误'}`);
+    }
+  });
+
   bot.launch();
   console.log('✅ Telegram Bot 已启动');
   
