@@ -545,15 +545,10 @@ if (BOT_TOKEN) {
       const filename = `${hash}${ext}`;
       const filepath = path.join(uploadsDir, filename);
 
-      // 对于WebM/WebP格式，检查是否已存在转换后的PNG文件
-      const needsConversion = (ext === '.webm' || ext === '.webp');
-      const finalFilename = needsConversion ? `${hash}.png` : filename;
-      const finalFilepath = needsConversion ? path.join(uploadsDir, finalFilename) : filepath;
-
-      // 如果最终文件已存在，直接返回URL
-      if (fs.existsSync(finalFilepath)) {
-        console.log(`✅ 文件已缓存: ${finalFilename}`);
-        return `http://192.168.9.159:3000/uploads/${finalFilename}`;
+      // 检查文件是否已缓存
+      if (fs.existsSync(filepath)) {
+        console.log(`✅ 文件已缓存: ${filename}`);
+        return `http://192.168.9.159:3000/uploads/${filename}`;
       }
 
       // 通过代理下载文件并保存（设置60秒超时）
@@ -590,18 +585,8 @@ if (BOT_TOKEN) {
         })
       ]);
 
-      // 如果需要转换格式（设置30秒超时）
-      if (needsConversion) {
-        console.log(`🔄 开始转换格式: ${ext} -> PNG`);
-        await Promise.race([
-          convertToPNG(filepath, finalFilepath),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('格式转换超时')), 30000)
-          )
-        ]);
-      }
-
-      return `http://192.168.9.159:3000/uploads/${finalFilename}`;
+      console.log(`✅ 文件准备就绪: ${filename} (${ext}格式)`);
+      return `http://192.168.9.159:3000/uploads/${filename}`;
 
     } catch (err) {
       console.error('下载Telegram文件失败:', err.message || err);

@@ -923,26 +923,53 @@
       contentDiv.appendChild(nameSpan);
     }
 
-    const img = document.createElement('img');
-    img.src = stickerUrl;
-    img.style.cssText = 'width:150px;height:150px;object-fit:contain;display:block';
-    img.alt = emoji || '贴纸';
+    // 检测文件类型并选择合适的显示方式
+    // .webm → <video>（视频贴纸）
+    // .webp/.png/.jpg → <img>（静态贴纸）
+    const isVideoSticker = stickerUrl.includes('.webm') || stickerUrl.includes('.mp4');
 
-    // 添加加载错误处理
-    img.onerror = () => {
-      console.error('贴纸加载失败:', stickerUrl);
-      contentDiv.innerHTML = '';
-      const errorDiv = document.createElement('div');
-      errorDiv.textContent = emoji ? `${emoji} [贴纸]` : '📄 [贴纸加载失败]';
-      errorDiv.style.cssText = 'font-size:48px;padding:20px';
-      contentDiv.appendChild(errorDiv);
-    };
+    if (isVideoSticker) {
+      // 使用 video 标签显示动态贴纸
+      const video = document.createElement('video');
+      video.src = stickerUrl;
+      video.style.cssText = 'width:150px;height:150px;object-fit:contain;display:block';
+      video.autoplay = true;
+      video.loop = true;
+      video.muted = true;
+      video.playsInline = true;
 
-    img.onload = () => {
-      console.log('贴纸加载成功:', stickerUrl);
-    };
+      video.onerror = () => {
+        console.error('视频贴纸加载失败:', stickerUrl);
+        contentDiv.innerHTML = '';
+        const errorDiv = document.createElement('div');
+        errorDiv.textContent = emoji ? `${emoji} [贴纸]` : '📄 [贴纸加载失败]';
+        errorDiv.style.cssText = 'font-size:48px;padding:20px';
+        contentDiv.appendChild(errorDiv);
+      };
 
-    contentDiv.appendChild(img);
+      contentDiv.appendChild(video);
+    } else {
+      // 使用 img 标签显示静态贴纸
+      const img = document.createElement('img');
+      img.src = stickerUrl;
+      img.style.cssText = 'width:150px;height:150px;object-fit:contain;display:block';
+      img.alt = emoji || '贴纸';
+
+      img.onerror = () => {
+        console.error('贴纸加载失败:', stickerUrl);
+        contentDiv.innerHTML = '';
+        const errorDiv = document.createElement('div');
+        errorDiv.textContent = emoji ? `${emoji} [贴纸]` : '📄 [贴纸加载失败]';
+        errorDiv.style.cssText = 'font-size:48px;padding:20px';
+        contentDiv.appendChild(errorDiv);
+      };
+
+      img.onload = () => {
+        console.log('贴纸加载成功:', stickerUrl);
+      };
+
+      contentDiv.appendChild(img);
+    }
 
     msgContainer.appendChild(contentDiv);
     div.appendChild(msgContainer);
@@ -981,15 +1008,21 @@
       contentDiv.appendChild(nameSpan);
     }
 
-    const img = document.createElement('img');
-    img.src = gifUrl;
-    img.className = 'message-image';
-    img.onclick = () => {
+    // Telegram GIF 是 MP4/H.264 格式，使用 video 标签
+    const video = document.createElement('video');
+    video.src = gifUrl;
+    video.className = 'message-image';
+    video.style.cssText = 'max-width:280px;max-height:280px;border-radius:8px;cursor:pointer;display:block';
+    video.autoplay = true;
+    video.loop = true;
+    video.muted = true;
+    video.playsInline = true;
+
+    video.onclick = () => {
       window.open(gifUrl, '_blank');
     };
 
-    // 添加加载错误处理
-    img.onerror = () => {
+    video.onerror = () => {
       console.error('GIF加载失败:', gifUrl);
       contentDiv.innerHTML = '';
       const errorDiv = document.createElement('div');
@@ -998,11 +1031,11 @@
       contentDiv.appendChild(errorDiv);
     };
 
-    img.onload = () => {
+    video.onloadeddata = () => {
       console.log('GIF加载成功:', gifUrl);
     };
 
-    contentDiv.appendChild(img);
+    contentDiv.appendChild(video);
 
     msgContainer.appendChild(contentDiv);
 
