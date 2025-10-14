@@ -799,13 +799,33 @@ if (BOT_TOKEN) {
       const clientMsgId = telegramMessageMap.get(message.message_id);
 
       if (clientMsgId && message.text) {
-        ws.send(JSON.stringify({
-          type: 'message_edited',
-          msgId: clientMsgId,
-          newText: message.text
-        }));
+        // 检查是否是删除标记
+        const deleteMarkers = ['[已删除]', '[deleted]', '[撤回]', '[recall]'];
+        const isDeleteMarker = deleteMarkers.some(marker =>
+          message.text.trim().toLowerCase() === marker.toLowerCase()
+        );
 
-        console.log(`✅ 通知用户 ${userId} 消息已编辑: ${clientMsgId}`);
+        if (isDeleteMarker) {
+          // 发送删除消息通知
+          ws.send(JSON.stringify({
+            type: 'message_deleted',
+            msgId: clientMsgId
+          }));
+
+          // 清除映射
+          telegramMessageMap.delete(message.message_id);
+
+          console.log(`🗑️ 客服删除消息，通知用户 ${userId}: ${clientMsgId}`);
+        } else {
+          // 正常的编辑操作
+          ws.send(JSON.stringify({
+            type: 'message_edited',
+            msgId: clientMsgId,
+            newText: message.text
+          }));
+
+          console.log(`✅ 通知用户 ${userId} 消息已编辑: ${clientMsgId}`);
+        }
       }
     }
   });
