@@ -785,18 +785,34 @@ if (BOT_TOKEN) {
 
   // 处理编辑的消息
   bot.on('edited_message', async (ctx) => {
+    console.log('📝 收到编辑消息事件');
     const message = ctx.editedMessage;
     const messageThreadId = message.message_thread_id;
 
-    if (!messageThreadId) return;
+    console.log(`  - 消息ID: ${message.message_id}`);
+    console.log(`  - 话题ID: ${messageThreadId || '(无)'}`);
+    console.log(`  - 消息文本: ${message.text || '(无文本)'}`);
+
+    if (!messageThreadId) {
+      console.log('  ❌ 没有话题ID，跳过');
+      return;
+    }
 
     const userId = topicUsers.get(messageThreadId);
-    if (!userId) return;
+    console.log(`  - 用户ID: ${userId || '(未找到)'}`);
+
+    if (!userId) {
+      console.log('  ❌ 未找到对应用户，跳过');
+      return;
+    }
 
     const ws = userConnections.get(userId);
+    console.log(`  - 用户在线: ${ws && ws.readyState === WebSocket.OPEN ? '是' : '否'}`);
+
     if (ws && ws.readyState === WebSocket.OPEN) {
       // 查找对应的客户端消息ID
       const clientMsgId = telegramMessageMap.get(message.message_id);
+      console.log(`  - 客户端消息ID: ${clientMsgId || '(未找到映射)'}`);
 
       if (clientMsgId && message.text) {
         // 检查是否是删除标记
@@ -804,6 +820,8 @@ if (BOT_TOKEN) {
         const isDeleteMarker = deleteMarkers.some(marker =>
           message.text.trim().toLowerCase() === marker.toLowerCase()
         );
+
+        console.log(`  - 是否删除标记: ${isDeleteMarker ? '是' : '否'}`);
 
         if (isDeleteMarker) {
           // 发送删除消息通知
@@ -826,6 +844,8 @@ if (BOT_TOKEN) {
 
           console.log(`✅ 通知用户 ${userId} 消息已编辑: ${clientMsgId}`);
         }
+      } else {
+        console.log('  ❌ 没有找到消息映射或没有文本');
       }
     }
   });
@@ -976,8 +996,10 @@ if (BOT_TOKEN) {
     }
   });
 
-  bot.launch();
-  console.log('✅ Telegram Bot 已启动');
+  bot.launch({
+    allowedUpdates: ['message', 'edited_message', 'callback_query']
+  });
+  console.log('✅ Telegram Bot 已启动 (已启用 edited_message 事件)');
   
 } else {
   console.log('⚠️ 未配置 BOT_TOKEN，Telegram 功能已禁用');
