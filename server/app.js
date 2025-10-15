@@ -67,9 +67,20 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_chat_messages_user_id ON chat_messages(user_id);
   CREATE INDEX IF NOT EXISTS idx_chat_messages_created_at ON chat_messages(created_at);
+
+  CREATE TABLE IF NOT EXISTS user_topics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id VARCHAR(255) NOT NULL UNIQUE,
+    topic_id INTEGER NOT NULL,
+    topic_name VARCHAR(255),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_user_topics_user_id ON user_topics(user_id);
+  CREATE INDEX IF NOT EXISTS idx_user_topics_topic_id ON user_topics(topic_id);
 `);
 
-console.log('✅ 聊天历史表已就绪');
+console.log('✅ 数据库表已就绪');
 
 // ==================== Express 应用 ====================
 
@@ -996,11 +1007,16 @@ if (BOT_TOKEN) {
     }
   });
 
+  // 启动 Bot (带错误处理，防止 Telegram 连接失败导致进程崩溃)
   bot.launch({
     allowedUpdates: ['message', 'edited_message', 'callback_query']
+  }).then(() => {
+    console.log('✅ Telegram Bot 已启动 (已启用 edited_message 事件)');
+  }).catch((err) => {
+    console.error('❌ Telegram Bot 启动失败:', err.message);
+    console.log('⚠️  Bot 将在后台继续尝试连接，HTTP服务器继续运行');
   });
-  console.log('✅ Telegram Bot 已启动 (已启用 edited_message 事件)');
-  
+
 } else {
   console.log('⚠️ 未配置 BOT_TOKEN，Telegram 功能已禁用');
 }
